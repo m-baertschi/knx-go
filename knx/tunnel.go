@@ -24,6 +24,9 @@ type TunnelConfig struct {
 
 	// ResponseTimeout specifies how long to wait for a response.
 	ResponseTimeout time.Duration
+
+	// PersistentConnection enables infinite retries
+	PersistentConnection bool
 }
 
 // DefaultTunnelConfig is a good default configuration for a Tunnel client.
@@ -506,20 +509,27 @@ func (conn *Tunnel) serve() {
 		}
 
 		// Check if we can try again.
-		if err == errDisconnected || err == errHeartbeatFailed {
+		if err != nil {
 			util.Log(conn, "Attempting reconnect")
 
-			reconnErr := conn.requestConn()
+			for {
+				reconnErr := conn.requestConn()
 
-			if reconnErr == nil {
-				util.Log(conn, "Reconnect succeeded")
-				continue
+				if reconnErr == nil {
+					util.Log(conn, "Reconnect succeeded")
+					break
+				}
+
+				util.Log(conn, "Reconnect failed: %v", reconnErr)
+
+				if !conn.config.PersistentConnection {
+					return
+				}
+				time.Sleep(5 * time.Second)
 			}
-
-			util.Log(conn, "Reconnect failed: %v", reconnErr)
+		} else {
+			return
 		}
-
-		return
 	}
 }
 
@@ -527,7 +537,7 @@ func (conn *Tunnel) serve() {
 // the function will take care of filling in the default values.
 func NewTunnel(gatewayAddr string, layer knxnet.TunnelLayer, config TunnelConfig) (*Tunnel, error) {
 	// Create socket which will be used for communication.
-	sock, err := knxnet.DialTunnel(gatewayAddr)
+	sock, err := knxnet.DialTunnelPersistent(gatewayAddr, config.PersistentConnection)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +554,7 @@ func NewTunnel(gatewayAddr string, layer knxnet.TunnelLayer, config TunnelConfig
 
 	// Connect to the gateway.
 	err = client.requestConn()
-	if err != nil {
+	if err != nil && !config.PersistentConnection {
 		sock.Close()
 		return nil, err
 	}

@@ -5,6 +5,7 @@ package knxnet
 
 import (
 	"net"
+	"strings"
 	"time"
 
 	"github.com/vapourismo/knx-go/knx/util"
@@ -19,13 +20,19 @@ type Socket interface {
 
 // TunnelSocket is a UDP socket for KNXnet/IP packet exchange.
 type TunnelSocket struct {
-	conn    *net.UDPConn
-	inbound <-chan Service
+	conn       *net.UDPConn
+	inbound    <-chan Service
+	persistent bool
 }
 
 // DialTunnel creates a new Socket which can used to exchange KNXnet/IP packets with a single
 // endpoint.
 func DialTunnel(address string) (*TunnelSocket, error) {
+	return DialTunnelPersistent(address, false)
+}
+
+// DialTunnelPersistent is like DialTunnel except that it allows you to enable persistent connections
+func DialTunnelPersistent(address string, persistentConnection bool) (*TunnelSocket, error) {
 	addr, err := net.ResolveUDPAddr("udp4", address)
 	if err != nil {
 		return nil, err
@@ -39,9 +46,9 @@ func DialTunnel(address string) (*TunnelSocket, error) {
 	conn.SetDeadline(time.Time{})
 
 	inbound := make(chan Service)
-	go serveUDPSocket(conn, addr, inbound)
+	go serveUDPSocket(conn, addr, inbound, persistentConnection)
 
-	return &TunnelSocket{conn, inbound}, nil
+	return &TunnelSocket{conn, inbound, persistentConnection}, nil
 }
 
 // Send transmits a KNXnet/IP packet.
@@ -94,7 +101,7 @@ func ListenRouterOnInterface(ifi *net.Interface, multicastAddress string) (*Rout
 	conn.SetDeadline(time.Time{})
 
 	inbound := make(chan Service)
-	go serveUDPSocket(conn, nil, inbound)
+	go serveUDPSocket(conn, nil, inbound, false)
 
 	return &RouterSocket{conn, addr, inbound}, nil
 }
@@ -125,7 +132,7 @@ func (sock *RouterSocket) Close() error {
 }
 
 // serveUDPSocket is the receiver worker for a UDP socket.
-func serveUDPSocket(conn *net.UDPConn, addr *net.UDPAddr, inbound chan<- Service) {
+func serveUDPSocket(conn *net.UDPConn, addr *net.UDPAddr, inbound chan<- Service, persistent bool) {
 	util.Log(conn, "Started worker")
 	defer util.Log(conn, "Worker exited")
 
@@ -136,8 +143,14 @@ func serveUDPSocket(conn *net.UDPConn, addr *net.UDPAddr, inbound chan<- Service
 
 	for {
 		len, sender, err := conn.ReadFromUDP(buffer[:])
-		if err != nil {
+		if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
+			return
+		} else if err != nil {
 			util.Log(conn, "Error during ReadFromUDP: %v", err)
+			if persistent {
+				time.Sleep(1 * time.Second)
+				continue
+			}
 			return
 		}
 
