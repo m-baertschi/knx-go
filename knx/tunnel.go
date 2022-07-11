@@ -6,6 +6,7 @@ package knx
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -325,7 +326,13 @@ func (conn *Tunnel) pushInbound(msg cemi.Message) {
 			// the server closed the inbound channel. Sending to a closed channel will panic. But we
 			// don't care, because cool guys don't look at explosions.
 			defer func() { recover() }()
-			conn.inbound <- msg
+
+			select {
+			case conn.inbound <- msg:
+			case <-time.After(3 * time.Second):
+				log.Println("Tunnel: Inbound channel timeout, dropping message")
+				return
+			}
 		}()
 	}
 }
