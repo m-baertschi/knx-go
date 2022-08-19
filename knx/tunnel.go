@@ -209,6 +209,10 @@ func (conn *Tunnel) requestDisc() error {
 
 // requestTunnel sends a tunnel request to the gateway and waits for an appropriate acknowledgement.
 func (conn *Tunnel) requestTunnel(data cemi.Message) error {
+	if conn == nil {
+		return errors.New("conn is nil")
+	}
+
 	// Sequence numbers cannot be reused, therefore we must protect against that.
 	conn.seqMu.Lock()
 	defer conn.seqMu.Unlock()
